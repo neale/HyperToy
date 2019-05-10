@@ -153,7 +153,8 @@ can be used for standard NN or for hypergan
 implements hypergan target network as a functional 
 passes whatever data to plotting
 """
-def get_points(args, nets, mixer, W1, W2, iter, net=None):
+def get_points(args, reals, nets, iter, net=None):
+    mixer, W1, W2 = nets
     points, targets, ents, probs = [], [], [], []
     y_nets = torch.zeros(15, 10000)
     point = 0
@@ -330,7 +331,7 @@ def train(args):
             print ('**************************************')
             with torch.no_grad():
                 #test_far_data(mixer, W1, W2)
-                get_points(mixer, W1, W2, epoch)            
+                get_points(args, (data, targets), [mixer, W1, W2], epoch)            
             #utils.save_hypernet_toy(args, [mixer, netD, W1, W2], test_acc)
 
 
