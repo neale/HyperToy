@@ -6,12 +6,12 @@ from torch.nn import functional as F
 import utils
 
 
-class Encoder(nn.Module):
+class Mixer(nn.Module):
     def __init__(self, args):
-        super(Encoder, self).__init__()
+        super(Mixer, self).__init__()
         for k, v in vars(args).items():
             setattr(self, k, v)
-        self.name = 'Encoder'
+        self.name = 'Mixer'
         self.linear1 = nn.Linear(self.ze, 100)
         self.linear2 = nn.Linear(100, 100)
         self.linear3 = nn.Linear(100, self.z*2)
@@ -34,12 +34,12 @@ class Encoder(nn.Module):
         #print ('E out: ', x.shape)
         return w1, w2
 
-class Encoder1layer(nn.Module):
+class Mixer1layer(nn.Module):
     def __init__(self, args):
-        super(Encoder1layer, self).__init__()
+        super(Mixer1layer, self).__init__()
         for k, v in vars(args).items():
             setattr(self, k, v)
-        self.name = 'Encoder'
+        self.name = 'Mixer'
         self.linear1 = nn.Linear(self.ze, 100)
         self.linear2 = nn.Linear(100, self.z*2)
         self.bn1 = nn.BatchNorm1d(100)
@@ -59,12 +59,12 @@ class Encoder1layer(nn.Module):
         #print ('E out: ', x.shape)
         return w1, w2
 
-class EncoderNoBN(nn.Module):
+class MixerNoBN(nn.Module):
     def __init__(self, args):
-        super(EncoderNoBN, self).__init__()
+        super(MixerNoBN, self).__init__()
         for k, v in vars(args).items():
             setattr(self, k, v)
-        self.name = 'Encoder'
+        self.name = 'Mixer'
         self.linear1 = nn.Linear(self.ze, 128)
         self.linear2 = nn.Linear(128, 128)
         self.linear3 = nn.Linear(128, self.z*2)
@@ -85,12 +85,12 @@ class EncoderNoBN(nn.Module):
         return w1, w2
 
 
-class EncoderHour(nn.Module):
+class MixerHour(nn.Module):
     def __init__(self, args):
-        super(EncoderHour, self).__init__()
+        super(MixerHour, self).__init__()
         for k, v in vars(args).items():
             setattr(self, k, v)
-        self.name = 'Encoder'
+        self.name = 'Mixer'
         self.linear1 = nn.Linear(self.ze, 128)
         self.linear2 = nn.Linear(128, 256)
         self.linear3 = nn.Linear(256, 512)

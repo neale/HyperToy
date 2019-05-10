@@ -44,8 +44,8 @@ def log_density(z, z_var):
     return z.cuda()
 
 
-def calc_gradient_penalty_layer(prior, netG, netE):
-    code = netE(prior)
+def calc_gradient_penalty_layer(prior, netG, mixer):
+    code = mixer(prior)
     gen_layer = netG(code)
     penalty = lambda x: ((x.norm(2, dim=1) - 1) ** 2).mean()
     ones = torch.ones(gen_layer.size()).cuda()

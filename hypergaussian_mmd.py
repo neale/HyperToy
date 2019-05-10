@@ -51,9 +51,7 @@ class NN(nn.Module):
 
 """ functional version of the actual target network """
 def eval_nn_f(data, layers):
-    h1, h2 = layers
-    h1_w, h1_b = h1
-    h2_w, h2_b = h2
+    h1_w, h1_b, h2_w, h2_b = layers
     x = F.linear(data, h1_w, bias=h1_b)
     x_damped = torch.exp(-x*.5) * (2*np.pi*torch.cos(x))
     x = F.linear(x_damped, h2_w, bias=h2_b)
@@ -135,22 +133,23 @@ can be used for standard NN or for hypergan
 implements hypergan target network as a functional 
 passes whatever data to plotting
 """
-def get_points(netE, W1, W2, iter, net=None):
+def get_points(mixer, W1, W2, iter, net=None):
     points, targets, ents, probs = [], [], [], []
     for x1 in np.linspace(-20, 30, 100):
         for x2 in np.linspace(-20, 30, 100):
             z = torch.randn(args.batch_size, args.ze).cuda()
-            codes = netE(z)
+            codes = mixer(z)
             preds = []
             l1_w, l1_b = W1(codes[0], training=False)
             l2_w, l2_b = W2(codes[1], training=False)
             clf_loss, acc = 0, 0
-            for (h1_w, h1_b, h2_w, h2_b) in zip(l1_w, l1_b, l2_w, l2_b):
+            layers_all = [l1_w, l1_b, l2_w, l2_b]
+            for layers in zip(*layers_all):
                 data = torch.tensor([x1, x2]).cuda()
                 if net is not None:
                     x = net(data)
                 else:
-                    x = eval_nn_f(data, [(h1_w, h1_b), (h2_w, h2_b)])
+                    x = eval_nn_f(data, layers)
                 preds.append(x)
             points.append((x1, x2))
             y = torch.stack(preds).mean(0).view(1, 4)
@@ -202,12 +201,12 @@ def mmd(x, y):
 
 def train(args):
     
-    netE = models.EncoderNoBN(args).cuda()
+    mixer = models.Mixer(args).cuda()
     W1 = models.GeneratorW1(args).cuda()
     W2 = models.GeneratorW2(args).cuda()
-    print (netE, W1, W2)
+    print (mixer, W1, W2)
 
-    optimE = optim.Adam(netE.parameters(), lr=1e-3, betas=(0.5, 0.9), weight_decay=1e-3)
+    optimE = optim.Adam(mixer.parameters(), lr=1e-3, betas=(0.5, 0.9), weight_decay=1e-3)
     optimW1 = optim.Adam(W1.parameters(), lr=1e-3, betas=(0.5, 0.9), weight_decay=1e-3)
     optimW2 = optim.Adam(W2.parameters(), lr=1e-3, betas=(0.5, 0.9), weight_decay=1e-3)
     
@@ -227,17 +226,17 @@ def train(args):
         for j in range(100):
             x = torch.randn(e_batch_size, args.ze).cuda()
             qz = torch.randn(e_batch_size, args.z*2).cuda()
-            codes = torch.stack(netE(x)).view(-1, args.z*2)
+            codes = torch.stack(mixer(x)).view(-1, args.z*2)
             mean_loss, cov_loss = ops.pretrain_loss(codes, qz)
             loss = mean_loss + cov_loss
             loss.backward()
             optimE.step()
-            netE.zero_grad()
+            mixer.zero_grad()
             print ('Pretrain Enc iter: {}, Mean Loss: {}, Cov Loss: {}'.format(
                 j, mean_loss.item(), cov_loss.item()))
             final = loss.item()
             if loss.item() < 0.1:
-                print ('Finished Pretraining Encoder')
+                print ('Finished Pretraining Mixer')
                 break
 
     net = NN().cuda()
@@ -253,8 +252,8 @@ def train(args):
         optimNN.zero_grad()
     print (cor)
     #with torch.no_grad():
-        #test_far_data(netE, W1, W2)
-        #plot(netE, W1, W2, 0, net)
+        #test_far_data(mixer, W1, W2)
+        #plot(mixer, W1, W2, 0, net)
         #sys.exit(0)
 
     print ('==> Begin Training')
@@ -264,48 +263,50 @@ def train(args):
         z = torch.randn(args.batch_size, args.ze).cuda()
         ze = torch.randn(args.batch_size, args.z).cuda()
         qz = torch.randn(args.batch_size, args.z*2).cuda()
-        codes = netE(z)
-        """
+        codes = mixer(z)
+        
         z11 = torch.randn(args.batch_size, args.z).cuda()
         z12 = torch.randn(args.batch_size, args.z).cuda()
         z21 = torch.randn(args.batch_size, args.z).cuda()
         z22 = torch.randn(args.batch_size, args.z).cuda()
-        latents11, latents12 = netE(z11)
-        latents21, latents22 = netE(z21)
+        latents11, latents12 = mixer(z11)
+        latents21, latents22 = mixer(z21)
         dz = mmd(z11, z21)
         dq = mmd(latents11, latents21) + mmd(latents12, latents22)
         d_qz = mmd(z11, latents11) + mmd(z12, latents12) + mmd(z21, latents21) + mmd(z22, latents22)
         d_loss = dz + dq/2 - 2*d_qz/4
         d_loss.backward()
-        """
+        
         l1_w, l1_b = W1(codes[0])
         l2_w, l2_b = W2(codes[1])
-        clf_loss, acc = 0, 0
-        for (h1_w, h1_b, h2_w, h2_b) in zip(l1_w, l1_b, l2_w, l2_b):
-            h1 = (h1_w, h1_b)
-            h2 = (h2_w, h2_b)
-            loss, correct = train_nn(args, [h1, h2], data, targets)
+        clf_loss, acc = 0, np.zeros((args.batch_size))
+        layers_all = [l1_w, l1_b, l2_w, l2_b]
+        for i, (layers) in enumerate(zip(*layers_all)):
+            loss, correct = train_nn(args, layers, data, targets)
             clf_loss += loss
-            acc += correct
-            loss.backward(retain_graph=True)
+            acc[i] = correct
+            # loss.backward(retain_graph=True)
         G_loss = clf_loss / args.batch_size
         G_loss.backward()
-        total_hyper_loss = G_loss #+ (gp.sum().cuda())#mean().cuda()
         
-        optimE.step(); optimW1.step(); optimW2.step();
-        optimE.zero_grad(); optimW1.zero_grad(), optimW2.zero_grad()
-        total_loss = total_hyper_loss.item()
+        optimE.step()
+        optimW1.step()
+        optimW2.step()
+        optimE.zero_grad()
+        optimW1.zero_grad()
+        optimW2.zero_grad()
+        G_loss = G_loss.item()
             
         if epoch % 100 == 0:
-            acc /= args.batch_size
+            m = np.around(acc.mean(), decimals=3)
+            s = np.around(acc.std(), decimals=3)
             print ('**************************************')
-            print ('Acc: {}, MD Loss: {}, D loss: {}'.format(acc, total_hyper_loss, 0))#d_loss))
+            print ('Acc: {}-{}, MD Loss: {}, D loss: {}'.format(m, s, G_loss, d_loss))
             print ('**************************************')
-            #if epoch > 100:
             with torch.no_grad():
-                #test_far_data(netE, W1, W2)
-                get_points(netE, W1, W2, epoch)            
-            #utils.save_hypernet_toy(args, [netE, netD, W1, W2], test_acc)
+                #test_far_data(mixer, W1, W2)
+                get_points(mixer, W1, W2, epoch)            
+            #utils.save_hypernet_toy(args, [mixer, netD, W1, W2], test_acc)
 
 
 if __name__ == '__main__':
