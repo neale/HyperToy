@@ -7,6 +7,7 @@ import argparse
 import numpy as np
 import matplotlib.pyplot as plt
 from scipy.stats import entropy
+from sklearn.manifold import TSNE
 
 import torch
 import torch.nn as nn
@@ -25,11 +26,13 @@ def load_args():
     parser.add_argument('--z', default=8, type=int, help='latent space width')
     parser.add_argument('--ze', default=8, type=int, help='encoder dimension')
     parser.add_argument('--batch_size', default=100, type=int)
-    parser.add_argument('--epochs', default=200000, type=int)
+    parser.add_argument('--epochs', default=200001, type=int)
     parser.add_argument('--dataset', default='gaussian', type=str)
     parser.add_argument('--save_dir', default='./', type=str)
     parser.add_argument('--act', default='cos', type=str)
-    parser.add_argument('--nd', default=2, type=str)
+    parser.add_argument('--nd', default=10, type=int)
+    parser.add_argument('--npts', default=10, type=int)
+    parser.add_argument('--gpu', default=0, type=int)
     parser.add_argument('--beta', default=10, type=int)
     parser.add_argument('--l', default=10, type=int)
     parser.add_argument('--pretrain_e', default=True, type=bool)
@@ -54,7 +57,7 @@ def to_color_lt(y):
 class NN(nn.Module):
     def __init__(self):
         super(NN, self).__init__()
-        self.linear1 = nn.Linear(2, 100)
+        self.linear1 = nn.Linear(10, 100)
         self.linear3 = nn.Linear(100, 4)
 
     def forward(self, x):
@@ -96,18 +99,22 @@ def train_nn(args, Z, data, target, p=False):
 barebones plotting function
 plots class labels and thats it
 """
-def plot_data(x, y, title):
+def plot_data(args, x, y, title):
     plt.close('all')
-    datas = [[], [], [], []]
+    data_arr = [[], [], [], []]
     for (data, target) in zip(x, y):
-        datas[target].append(np.array(data))
-    plt.scatter(*zip(*datas[0]), alpha=.5, linewidth=.1, edgecolor='k', label='c1')
-    plt.scatter(*zip(*datas[1]), alpha=.5, linewidth=.1, edgecolor='k', label='c2')
-    plt.scatter(*zip(*datas[2]), alpha=.5, linewidth=.1, edgecolor='k', label='c3')
-    plt.scatter(*zip(*datas[3]), alpha=.5, linewidth=.1, edgecolor='k', label='c4')
-    plt.xlim(0, 10)
-    plt.ylim(0, 10)
-    #plt.legend(loc='best')
+        data_arr[target].append(data.numpy())
+    data = np.stack(data_arr).reshape(-1, args.nd)
+    proj = TSNE(2, perplexity=args.npts//2, learning_rate=100, init='pca')
+    data = proj.fit_transform(data)
+    c1 = data[:args.npts] 
+    c2 = data[args.npts:args.npts*2] 
+    c3 = data[args.npts*2:args.npts*3] 
+    c4 = data[args.npts*3:] 
+    plt.scatter(*zip(*c1), alpha=.5, linewidth=.1, edgecolor='k', label='c1')
+    plt.scatter(*zip(*c2), alpha=.5, linewidth=.1, edgecolor='k', label='c2')
+    plt.scatter(*zip(*c3), alpha=.5, linewidth=.1, edgecolor='k', label='c3')
+    plt.scatter(*zip(*c3), alpha=.5, linewidth=.1, edgecolor='k', label='c4')
     plt.savefig('{}/{}'.format(args.save_dir, title))
 
 
@@ -124,17 +131,19 @@ def plot_data_entropy(args, x, y, reals, y_nets, ents, title):
     ents[ents<=0.35] = 0.
     # plot individual nets
     fig, ax = plt.subplots(4, 5, figsize=(15, 15))
-    plt.suptitle('HyperGAN 2D')
+    plt.suptitle('HyperGAN 10D Projection')
     model = 0
     data_r, target_r = reals
     data_r = data_r.cpu().numpy()
+    proj = TSNE(2, perplexity=args.npts//4, learning_rate=100, init='pca')
+    x = proj.fit_transform(x.cpu().numpy())
+    data_r = proj.fit_transform(data_r)
+
     print ('plotting nets')
     for xsub in range(3):
         for ysub in range(5):
             y_net = y_nets[model, :]
             ax[xsub, ysub].set_title('Net {}'.format(model))
-            ax[xsub, ysub].set_xlim(-20, 30)
-            ax[xsub, ysub].set_ylim(-20, 30)
             for (data, target) in zip(x, y_net):
                 ax[xsub, ysub].scatter(*data, c=to_color_lt(target))
             for (data, target) in zip(data_r, target_r):
@@ -142,8 +151,6 @@ def plot_data_entropy(args, x, y, reals, y_nets, ents, title):
             model += 1
     # plot hypernet
     ax[3, 0].set_title('HyperGAN')
-    ax[3, 0].set_xlim(-20, 30)
-    ax[3, 0].set_ylim(-20, 30)
     for (data, target, ent) in zip(x, y, ents):
         ax[3, 0].scatter(*data, c=to_color_lt(target), alpha=ent)
     for (data, target) in zip(data_r, target_r):
@@ -158,38 +165,30 @@ can be used for standard NN or for hypergan
 implements hypergan target network as a functional 
 passes whatever data to plotting
 """
-def get_points(args, reals, nets, iter, net=None):
+def get_points(args, outliers, reals, nets, iter):
     mixer, W1, W2 = nets
-    points, targets, ents, probs = [], [], [], []
-    npts = 50
-    y_nets = torch.zeros(15, npts**2)
-    point = 0
-    print ('calculating network responses for {}^2 points'.format(npts))
-    for x1 in np.linspace(-20, 30, npts):
-        for x2 in np.linspace(-20, 30, npts):
-            z = torch.randn(args.batch_size, args.ze).cuda()
-            codes = mixer(z)
-            preds = []
-            l1_w, l1_b = W1(codes[0], training=False)
-            l2_w, l2_b = W2(codes[1], training=False)
-            clf_loss, acc = 0, 0
-            layers_all = [l1_w, l1_b, l2_w, l2_b]
-            for i, layers in enumerate(zip(*layers_all)):
-                data = torch.tensor([x1, x2]).cuda()
-                if net is not None:
-                    x = net(data)
-                else:
-                    x = eval_nn_f(args, data, layers)
-                preds.append(x)
-                if i < 15:
-                    y_nets[i, point] = x.max(0)[1].item()
-            points.append((x1, x2))
-            point += 1
-            y = torch.stack(preds).mean(0).view(1, 4)
-            targets.append(F.softmax(y, dim=1).max(1, keepdim=True)[1].item())
-            ents.append(entropy(F.softmax(torch.stack(preds), dim=1).mean(0).cpu().numpy().T))
-            #probs.append(F.softmax(torch.stack(preds),dim=1).mean(0).max().item())
-    plot_data_entropy(args, points, targets, reals, y_nets, ents, 'gaussian_{}'.format(iter))
+    preds, ents = [], []
+    y_nets = torch.zeros(15, len(outliers))
+    print ('calculating network responses for {}^2 points'.format(args.npts))
+    for sample_idx, sample in enumerate(outliers):
+        z = torch.randn(args.batch_size, args.ze).cuda()
+        codes = mixer(z)
+        logits = []
+        l1_w, l1_b = W1(codes[0], training=False)
+        l2_w, l2_b = W2(codes[1], training=False)
+        clf_loss, acc = 0, 0
+        layers_all = [l1_w, l1_b, l2_w, l2_b]
+        for i, layers in enumerate(zip(*layers_all)):
+            data = sample.cuda()
+            x = eval_nn_f(args, data, layers)
+            logits.append(x)
+            if i < 15: # only plot first 15 nets
+                y_nets[i, sample_idx] = x.max(0)[1].item()
+        y = torch.stack(logits).mean(0).view(1, 4)
+        preds.append(F.softmax(y, dim=1).max(1, keepdim=True)[1].item())
+        ents.append(entropy(F.softmax(torch.stack(logits), dim=1).mean(0).cpu().numpy().T))
+        #probs.append(F.softmax(torch.stack(preds),dim=1).mean(0).max().item())
+    plot_data_entropy(args, outliers, preds, reals, y_nets, ents, 'gaussian_{}'.format(iter))
     
 
 """ permutes a data and label tensor with the same permutation matrix """
@@ -200,20 +199,39 @@ def perm_data(x, y):
     return x_perm.cuda(), y_perm.cuda()
 
 
+def get_means():
+    means = []
+    means.append(torch.tensor([0, 2, 1, 2, 2, 0, 1, 0, 1, 0]).float())
+    means.append(torch.tensor([5, 3, 4, 4, 3, 5, 3, 4, 4, 3]).float())
+    means.append(torch.tensor([6, 7, 7, 6, 7, 6, 7, 6, 7, 7]).float())
+    means.append(torch.tensor([8, 9, 8, 9, 8, 9, 8, 9, 8, 9]).float()) 
+    return means
+
+
 def create_data(args):
-    dist1 = MultivariateNormal(torch.tensor([4.2, 6.2]), torch.eye(2)*.06)
-    dist2 = MultivariateNormal(torch.tensor([4.8, 5.2]), torch.eye(2)*.06)
-    dist3 = MultivariateNormal(torch.tensor([6., 6.0]), torch.eye(2)*.06)
-    dist4 = MultivariateNormal(torch.tensor([6., 3.9]), torch.eye(2)*.06)
-    p1 = dist1.sample((25,))
-    p2 = dist2.sample((25,))
-    p3 = dist3.sample((25,))
-    p4 = dist4.sample((25,))
-    x = torch.stack([p1, p2, p3, p4]).view(-1, 2).cuda()
-    y_base = torch.ones(25)
-    y = torch.stack([y_base*0, y_base, y_base*2, y_base*3]).long().view(-1).cuda()
-    plot_data(x.cpu(), y.cpu(), 'gaussian_2')
-    return x, y
+    n = args.npts
+    means = get_means()
+    inliers, outliers = [], []
+    for i in range(4):
+        inliers.append(MultivariateNormal(means[i], torch.eye(10)*.05))
+    for i in range(4):
+        # sample from larger distribution. soap bubbles are helpful here
+        outliers.append(MultivariateNormal(means[i], torch.eye(10)))
+    inlier_samples, outlier_samples = [], []
+    for i in range(4):
+        inlier_samples.append(inliers[i].sample((n,)))
+    for i in range(4):
+        outlier_samples.append(outliers[i].sample((500,)))
+
+    x_in = torch.stack(inlier_samples).view(-1, 10).cuda()
+    x_out = torch.stack(outlier_samples).view(-1, 10).cuda()
+    y_in = torch.ones(args.npts)
+    y_out = torch.ones(500)
+    y_in = torch.stack([y_in*0, y_in, y_in*2, y_in*3]).long().view(-1).cuda()
+    y_out = torch.stack([y_out*0, y_out, y_out*2, y_out*3]).long().view(-1).cuda()
+    plot_data(args, x_in.cpu(), y_in.cpu(), 'gaussian_inliers')
+    plot_data(args, x_out.cpu(), y_out.cpu(), 'gaussian_outliers')
+    return x_in, y_in, x_out
 
 
 def mmd(x, y):
@@ -239,16 +257,16 @@ def train(args):
     W2 = models.GeneratorW2(args).cuda()
     print (mixer, W1, W2)
 
-    optimE = optim.Adam(mixer.parameters(), lr=1e-3, betas=(0.5, 0.9), weight_decay=1e-3)
-    optimW1 = optim.Adam(W1.parameters(), lr=1e-3, betas=(0.5, 0.9), weight_decay=1e-3)
-    optimW2 = optim.Adam(W2.parameters(), lr=1e-3, betas=(0.5, 0.9), weight_decay=1e-3)
+    optimE = optim.Adam(mixer.parameters(), lr=1e-4, betas=(0.5, 0.9), weight_decay=1e-3)
+    optimW1 = optim.Adam(W1.parameters(), lr=1e-4, betas=(0.5, 0.9), weight_decay=1e-3)
+    optimW2 = optim.Adam(W2.parameters(), lr=1e-4, betas=(0.5, 0.9), weight_decay=1e-3)
     
     best_test_acc, best_clf_acc, best_test_loss, = 0., 0., np.inf
     args.best_loss, args.best_acc = best_test_loss, best_test_acc
     args.best_clf_loss, args.best_clf_acc = np.inf, 0
 
     print ('==> Creating 4 Gaussians')
-    data, targets = create_data(args)
+    data, targets, outliers = create_data(args)
     one = torch.tensor(1.).cuda()
     mone = one * -1
     print ("==> pretraining encoder")
@@ -314,7 +332,7 @@ def train(args):
         l2_w, l2_b = W2(codes[1])
         clf_loss, acc = 0, np.zeros((args.batch_size))
         layers_all = [l1_w, l1_b, l2_w, l2_b]
-        for i, (layers) in enumerate(zip(*layers_all)):
+        for i, layers in enumerate(zip(*layers_all)):
             loss, correct = train_nn(args, layers, data, targets)
             clf_loss += loss
             acc[i] = correct
@@ -338,12 +356,15 @@ def train(args):
             print ('**************************************')
             with torch.no_grad():
                 #test_far_data(mixer, W1, W2)
-                get_points(args, (data, targets), [mixer, W1, W2], epoch)            
+                get_points(args, outliers, (data, targets), [mixer, W1, W2], epoch)            
             #utils.save_hypernet_toy(args, [mixer, netD, W1, W2], test_acc)
 
 
 if __name__ == '__main__':
     args = load_args()
+    if args.gpu is not 0:
+        torch.cuda.set_device(args.gpu)
+        print ('using GPU ', torch.cuda.current_device())
     if not os.path.exists(args.save_dir):
         os.makedirs(args.save_dir)
     train(args)
