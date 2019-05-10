@@ -23,8 +23,8 @@ import arch.toy_expr as models
 def load_args():
 
     parser = argparse.ArgumentParser(description='param-wgan')
-    parser.add_argument('--z', default=8, type=int, help='latent space width')
-    parser.add_argument('--ze', default=8, type=int, help='encoder dimension')
+    parser.add_argument('--z', default=16, type=int, help='latent space width')
+    parser.add_argument('--ze', default=16, type=int, help='encoder dimension')
     parser.add_argument('--batch_size', default=100, type=int)
     parser.add_argument('--epochs', default=200001, type=int)
     parser.add_argument('--dataset', default='gaussian', type=str)
@@ -105,16 +105,20 @@ def plot_data(args, x, y, title):
     for (data, target) in zip(x, y):
         data_arr[target].append(data.numpy())
     data = np.stack(data_arr).reshape(-1, args.nd)
-    proj = TSNE(2, perplexity=args.npts//2, learning_rate=100, init='pca')
+    if len(data) < 500:
+        proj = TSNE(2, perplexity=5, learning_rate=50, init='pca', random_state=0)
+    else:
+        proj = TSNE(2, perplexity=100, learning_rate=50, init='pca', random_state=0)
     data = proj.fit_transform(data)
-    c1 = data[:args.npts] 
-    c2 = data[args.npts:args.npts*2] 
-    c3 = data[args.npts*2:args.npts*3] 
-    c4 = data[args.npts*3:] 
+    i = len(data)//4
+    c1 = data[:i] 
+    c2 = data[i:i*2] 
+    c3 = data[i*2:i*3] 
+    c4 = data[i*3:] 
     plt.scatter(*zip(*c1), alpha=.5, linewidth=.1, edgecolor='k', label='c1')
     plt.scatter(*zip(*c2), alpha=.5, linewidth=.1, edgecolor='k', label='c2')
     plt.scatter(*zip(*c3), alpha=.5, linewidth=.1, edgecolor='k', label='c3')
-    plt.scatter(*zip(*c3), alpha=.5, linewidth=.1, edgecolor='k', label='c4')
+    plt.scatter(*zip(*c4), alpha=.5, linewidth=.1, edgecolor='k', label='c4')
     plt.savefig('{}/{}'.format(args.save_dir, title))
 
 
@@ -123,8 +127,9 @@ this will plot data from the 4 clusters
 currently supports passing class data (x, y) and entropy - alpha
 saves to some predefined folder
 """
-def plot_data_entropy(args, x, y, reals, y_nets, ents, title):
+def plot_data_entropy(args, outliers, y, reals, y_nets, ents, title):
     plt.close('all')
+    x, y_out = outliers
     ents = np.array(ents)
     ents = 1 - ((ents - ents.min()) / (ents.max() - ents.min()))
     ents[ents>.7] = 1.0
@@ -135,11 +140,13 @@ def plot_data_entropy(args, x, y, reals, y_nets, ents, title):
     model = 0
     data_r, target_r = reals
     data_r = data_r.cpu().numpy()
-    proj = TSNE(2, perplexity=args.npts//4, learning_rate=100, init='pca')
-    x = proj.fit_transform(x.cpu().numpy())
-    data_r = proj.fit_transform(data_r)
+    proj_out = TSNE(2, perplexity=250, learning_rate=50, init='pca', random_state=0)
+    proj_in = TSNE(2, perplexity=args.npts//2, learning_rate=50, init='pca', random_state=0)
+    x = proj_out.fit_transform(x.cpu().numpy())
+    data_r = proj_in.fit_transform(data_r)
 
     print ('plotting nets')
+    # light color is predictions, dark is real data
     for xsub in range(3):
         for ysub in range(5):
             y_net = y_nets[model, :]
@@ -156,6 +163,11 @@ def plot_data_entropy(args, x, y, reals, y_nets, ents, title):
     for (data, target) in zip(data_r, target_r):
         ax[3, 0].scatter(*data, c=to_color_dk(target))
 
+    ax[3, 1].set_title('Data')
+    for (data, target) in zip(x, y_out):
+        ax[3, 1].scatter(*data, c=to_color_lt(target))
+    for (data, target) in zip(data_r, target_r):
+        ax[3, 1].scatter(*data, c=to_color_dk(target))
     print ('saving to ', args.save_dir)
     plt.savefig(args.save_dir+'/{}'.format(title))
 
@@ -166,6 +178,7 @@ implements hypergan target network as a functional
 passes whatever data to plotting
 """
 def get_points(args, outliers, reals, nets, iter):
+    outliers, y_out = outliers
     mixer, W1, W2 = nets
     preds, ents = [], []
     y_nets = torch.zeros(15, len(outliers))
@@ -188,7 +201,7 @@ def get_points(args, outliers, reals, nets, iter):
         preds.append(F.softmax(y, dim=1).max(1, keepdim=True)[1].item())
         ents.append(entropy(F.softmax(torch.stack(logits), dim=1).mean(0).cpu().numpy().T))
         #probs.append(F.softmax(torch.stack(preds),dim=1).mean(0).max().item())
-    plot_data_entropy(args, outliers, preds, reals, y_nets, ents, 'gaussian_{}'.format(iter))
+    plot_data_entropy(args, (outliers, y_out), preds, reals, y_nets, ents, 'gaussian_{}'.format(iter))
     
 
 """ permutes a data and label tensor with the same permutation matrix """
@@ -213,7 +226,7 @@ def create_data(args):
     means = get_means()
     inliers, outliers = [], []
     for i in range(4):
-        inliers.append(MultivariateNormal(means[i], torch.eye(10)*.05))
+        inliers.append(MultivariateNormal(means[i], torch.eye(10)*.005))
     for i in range(4):
         # sample from larger distribution. soap bubbles are helpful here
         outliers.append(MultivariateNormal(means[i], torch.eye(10)))
@@ -231,7 +244,7 @@ def create_data(args):
     y_out = torch.stack([y_out*0, y_out, y_out*2, y_out*3]).long().view(-1).cuda()
     plot_data(args, x_in.cpu(), y_in.cpu(), 'gaussian_inliers')
     plot_data(args, x_out.cpu(), y_out.cpu(), 'gaussian_outliers')
-    return x_in, y_in, x_out
+    return (x_in, y_in), (x_out, y_out)
 
 
 def mmd(x, y):
@@ -266,7 +279,8 @@ def train(args):
     args.best_clf_loss, args.best_clf_acc = np.inf, 0
 
     print ('==> Creating 4 Gaussians')
-    data, targets, outliers = create_data(args)
+    real, outliers = create_data(args)
+    data, targets = real
     one = torch.tensor(1.).cuda()
     mone = one * -1
     print ("==> pretraining encoder")
