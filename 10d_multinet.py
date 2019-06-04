@@ -7,7 +7,7 @@ import argparse
 import numpy as np
 import matplotlib.pyplot as plt
 from scipy.stats import entropy
-from sklearn.manifold import TSNE
+from sklearn.manifold import TSNE, MDS
 
 import torch
 import torch.nn as nn
@@ -23,8 +23,8 @@ import arch.toy_expr as models
 def load_args():
 
     parser = argparse.ArgumentParser(description='param-wgan')
-    parser.add_argument('--z', default=16, type=int, help='latent space width')
-    parser.add_argument('--ze', default=16, type=int, help='encoder dimension')
+    parser.add_argument('--z', default=32, type=int, help='latent space width')
+    parser.add_argument('--s', default=64, type=int, help='encoder dimension')
     parser.add_argument('--batch_size', default=100, type=int)
     parser.add_argument('--epochs', default=200001, type=int)
     parser.add_argument('--dataset', default='gaussian', type=str)
@@ -106,9 +106,11 @@ def plot_data(args, x, y, title):
         data_arr[target].append(data.numpy())
     data = np.stack(data_arr).reshape(-1, args.nd)
     if len(data) < 500:
-        proj = TSNE(2, perplexity=5, learning_rate=50, init='pca', random_state=0)
+        #proj = TSNE(2, perplexity=5, learning_rate=50, init='pca', random_state=0)
+        proj = MDS(2, n_init=3)
     else:
-        proj = TSNE(2, perplexity=100, learning_rate=50, init='pca', random_state=0)
+        #proj = TSNE(2, perplexity=100, learning_rate=50, init='pca', random_state=0)
+        proj = MDS(2, n_init=3)
     data = proj.fit_transform(data)
     i = len(data)//4
     c1 = data[:i] 
@@ -120,6 +122,45 @@ def plot_data(args, x, y, title):
     plt.scatter(*zip(*c3), alpha=.5, linewidth=.1, edgecolor='k', label='c3')
     plt.scatter(*zip(*c4), alpha=.5, linewidth=.1, edgecolor='k', label='c4')
     plt.savefig('{}/{}'.format(args.save_dir, title))
+
+def plot_multidata(args, x1, x2, y1, y2, title):
+
+    data_arr1 = [[], [], [], []]
+    for (data, target) in zip(x1, y1):
+        data_arr1[target].append(data.numpy())
+    data1 = np.stack(data_arr1).reshape(-1, args.nd)
+    data_arr2 = [[], [], [], []]
+    for (data, target) in zip(x2, y2):
+        data_arr2[target].append(data.numpy())
+    data2 = np.stack(data_arr2).reshape(-1, args.nd)
+    #proj = TSNE(2, perplexity=100, learning_rate=50, init='pca', random_state=0)
+    proj = MDS(2, n_init=3, random_state=123)
+    data1 = proj.fit_transform(data1)
+    data2 = proj.fit_transform(data2)
+
+    i = len(data1)//4
+    c1_1 = data1[:i] 
+    c2_1 = data1[i:i*2] 
+    c3_1 = data1[i*2:i*3] 
+    c4_1 = data1[i*3:] 
+    plt.scatter(*zip(*c1_1), alpha=.5, linewidth=.1, edgecolor='k', label='c1')
+    plt.scatter(*zip(*c2_1), alpha=.5, linewidth=.1, edgecolor='k', label='c2')
+    plt.scatter(*zip(*c3_1), alpha=.5, linewidth=.1, edgecolor='k', label='c3')
+    plt.scatter(*zip(*c4_1), alpha=.5, linewidth=.1, edgecolor='k', label='c4')
+    
+    i = len(data2)//4
+    c1_2 = data2[:i] 
+    c2_2 = data2[i:i*2] 
+    c3_2 = data2[i*2:i*3] 
+    c4_2 = data2[i*3:] 
+    plt.scatter(*zip(*c1_2), alpha=.5, linewidth=.1, edgecolor='k', label='c1')
+    plt.scatter(*zip(*c2_2), alpha=.5, linewidth=.1, edgecolor='k', label='c2')
+    plt.scatter(*zip(*c3_2), alpha=.5, linewidth=.1, edgecolor='k', label='c3')
+    plt.scatter(*zip(*c4_2), alpha=.5, linewidth=.1, edgecolor='k', label='c4')
+    
+    plt.legend(loc='best')
+    plt.savefig('{}/{}'.format(args.save_dir, title))
+
 
 
 """ 
@@ -140,8 +181,10 @@ def plot_data_entropy(args, outliers, y, reals, y_nets, ents, title):
     model = 0
     data_r, target_r = reals
     data_r = data_r.cpu().numpy()
-    proj_out = TSNE(2, perplexity=250, learning_rate=50, init='pca', random_state=0)
-    proj_in = TSNE(2, perplexity=args.npts//2, learning_rate=50, init='pca', random_state=0)
+    #proj_out = TSNE(2, perplexity=250, learning_rate=50, init='pca', random_state=0)
+    proj_out = MDS(2, n_init=3, random_state=123)
+    #proj_in = TSNE(2, perplexity=args.npts//2, learning_rate=50, init='pca', random_state=0)
+    proj_in = MDS(2, n_init=3, random_state=123)
     x = proj_out.fit_transform(x.cpu().numpy())
     data_r = proj_in.fit_transform(data_r)
 
@@ -184,8 +227,8 @@ def get_points(args, outliers, reals, nets, iter):
     y_nets = torch.zeros(15, len(outliers))
     print ('calculating network responses for {}^2 points'.format(args.npts))
     for sample_idx, sample in enumerate(outliers):
-        z = torch.randn(args.batch_size, args.ze).cuda()
-        codes = mixer(z)
+        s = torch.randn(args.batch_size, args.s).cuda()
+        codes = mixer(s)
         logits = []
         l1_w, l1_b = W1(codes[0], training=False)
         l2_w, l2_b = W2(codes[1], training=False)
@@ -229,7 +272,7 @@ def create_data(args):
         inliers.append(MultivariateNormal(means[i], torch.eye(10)*.005))
     for i in range(4):
         # sample from larger distribution. soap bubbles are helpful here
-        outliers.append(MultivariateNormal(means[i], torch.eye(10)))
+        outliers.append(MultivariateNormal(means[i], torch.eye(10)*2))
     inlier_samples, outlier_samples = [], []
     for i in range(4):
         inlier_samples.append(inliers[i].sample((n,)))
@@ -242,8 +285,7 @@ def create_data(args):
     y_out = torch.ones(500)
     y_in = torch.stack([y_in*0, y_in, y_in*2, y_in*3]).long().view(-1).cuda()
     y_out = torch.stack([y_out*0, y_out, y_out*2, y_out*3]).long().view(-1).cuda()
-    plot_data(args, x_in.cpu(), y_in.cpu(), 'gaussian_inliers')
-    plot_data(args, x_out.cpu(), y_out.cpu(), 'gaussian_outliers')
+    plot_multidata(args, x_in.cpu(), x_out.cpu(), y_in.cpu(), y_out.cpu(), 'gaussian_all')
     return (x_in, y_in), (x_out, y_out)
 
 
@@ -289,10 +331,10 @@ def train(args):
     e_batch_size = 1000
     if args.pretrain_e is True:
         for j in range(100):
-            x = torch.randn(e_batch_size, args.ze).cuda()
-            qz = torch.randn(e_batch_size, args.z*2).cuda()
-            codes = torch.stack(mixer(x)).view(-1, args.z*2)
-            mean_loss, cov_loss = ops.pretrain_loss(codes, qz)
+            s = torch.randn(e_batch_size, args.s).cuda()
+            full_z = torch.randn(e_batch_size, args.z*2).cuda()
+            codes = torch.stack(mixer(s)).view(-1, args.z*2)
+            mean_loss, cov_loss = ops.pretrain_loss(codes, full_z)
             loss = mean_loss + cov_loss
             loss.backward()
             optimE.step()
@@ -320,22 +362,22 @@ def train(args):
         #test_far_data(mixer, W1, W2)
         #plot(mixer, W1, W2, 0, net)
         #sys.exit(0)
-
+    sample_fn = lambda x: torch.randn(args.batch_size, x).cuda()
     print ('==> Begin Training')
     for epoch in range(args.epochs):
         data, targets = perm_data(data, targets)
         # data, targets = create_data(args)
-        z = torch.randn(args.batch_size, args.ze).cuda()
-        ze = torch.randn(args.batch_size, args.z).cuda()
-        qz = torch.randn(args.batch_size, args.z*2).cuda()
-        codes = mixer(z)
+        s = torch.randn(args.batch_size, args.s).cuda()
+        z = torch.randn(args.batch_size, args.z).cuda()
+        full_z = torch.randn(args.batch_size, args.z*2).cuda()
+        codes = mixer(s)
         
         z11 = torch.randn(args.batch_size, args.z).cuda()
         z12 = torch.randn(args.batch_size, args.z).cuda()
         z21 = torch.randn(args.batch_size, args.z).cuda()
         z22 = torch.randn(args.batch_size, args.z).cuda()
-        latents11, latents12 = mixer(z11)
-        latents21, latents22 = mixer(z21)
+        latents11, latents12 = mixer(sample_fn(args.s))
+        latents21, latents22 = mixer(sample_fn(args.s))
         dz = mmd(z11, z21)
         dq = mmd(latents11, latents21) + mmd(latents12, latents22)
         d_qz = mmd(z11, latents11) + mmd(z12, latents12) + mmd(z21, latents21) + mmd(z22, latents22)

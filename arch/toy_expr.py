@@ -12,21 +12,20 @@ class Mixer(nn.Module):
         for k, v in vars(args).items():
             setattr(self, k, v)
         self.name = 'Mixer'
-        self.linear1 = nn.Linear(self.ze, 100)
+        self.linear1 = nn.Linear(self.s, 100)
         self.linear2 = nn.Linear(100, 100)
         self.linear3 = nn.Linear(100, self.z*2)
         self.bn1 = nn.BatchNorm1d(100)
         self.bn2 = nn.BatchNorm1d(100)
-        self.relu = nn.ReLU(inplace=True)
 
     
     def forward(self, x, training=True):
         #print ('E in: ', x.shape)
         if training:
             x = x + torch.randn_like(x)
-        x = x.view(-1, self.ze) #flatten filter size
-        x = self.relu(self.bn1(self.linear1(x)))
-        x = self.relu(self.bn2(self.linear2(x)))
+        x = x.view(-1, self.s) #flatten filter size
+        x = F.relu(self.bn1(self.linear1(x)))
+        x = F.relu(self.bn2(self.linear2(x)))
         x = self.linear3(x)
         x = x.view(-1, 2, self.z)
         w1 = x[:, 0]
